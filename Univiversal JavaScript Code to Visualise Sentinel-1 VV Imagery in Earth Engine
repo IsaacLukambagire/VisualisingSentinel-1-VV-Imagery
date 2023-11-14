@@ -1,0 +1,99 @@
+JavaScript code for visualizing Sentinel-1 VV imagery in EarthEngine.
+//
+// Set the startDate and endDate variables, as well as ptsCentre (the
+// the sites to include in the image search)
+//
+// Written by Isaac Lukambagire; last update 2023-11-14
+// ---------------------------------------------------------------------------
+
+// Sample sites set
+var Sample_site_1 = ee.Geometry.Point([88.331389, 27.947222]);
+    
+
+// INPUTS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+// Set site(s) to include
+var ptsCentre = ee.FeatureCollection([
+    ee.Feature(Sample_site_1, {'featureID': 'Sample_site_1'})]);
+
+// Set date range
+var startDate = ee.Date('2023-09-25');
+var endDate = ee.Date('2023-11-05');
+
+
+// Buffer to use, radius in metres
+
+var buff = 200;
+
+// END INPUTS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+// Buffer function
+function bufferPoints(radius, bounds) {
+  return function(pt) {
+    pt = ee.Feature(pt);
+    return pt.buffer(radius);
+  };
+}
+
+// Buffer points by X metres using round (false) area
+var ptsBuff = ptsCentre.map(bufferPoints(buff, false));
+
+// Sentinel-1 GRD collection
+var S1_col = ee.ImageCollection("COPERNICUS/S1_GRD")
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'));
+
+// Filter image collection further - getting both EW and IW
+var S1_col_filt = S1_col.filterBounds(ptsCentre)
+			.filterDate(startDate, endDate)
+			.filter(ee.Filter.eq('instrumentMode', 'IW'))
+            .sort('system:time_start');
+print(S1_col_filt);
+
+// Function to normalize the HH backscatter (based on Mahmud et al 2018);
+// use 0.19 for general and SYI, 0.22 for FYI, 0.16 for MYI
+// currently set for normalization to 35 degrees
+function calcNorm(image) {
+  return image.expression('VV + 0.19*(IncAng - 35)', {
+			'VV': image.select('VV'),
+			'IncAng': image.select('angle'),}).rename('HHnorm')
+			.set('system:time_start', image.date());
+}
+
+// Run normalization function over image collection
+var S1_col_filt_HHnorm = S1_col_filt.map(calcNorm);
+print('S1_col_filt_HHnorm: ', S1_col_filt_HHnorm);
+
+// Combine with pre-normalized data to preserve metadata
+var S1_col_filt_HH_HHnorm = S1_col_filt.combine(S1_col_filt_HHnorm)
+    .sort('system:time_start');
+
+// Count image collection size
+var collectionCount = S1_col_filt_HH_HHnorm.size();
+
+// Print image information
+var S1_set = S1_col_filt_HH_HHnorm.toList(collectionCount);
+print(S1_set);
+
+// Visualization settings
+var VizParams = {
+  min: -25,
+  max: 0,
+  gamma: [1],
+  // bands: ['HH'],
+  bands: ['HHnorm'],
+};
+
+// Display all images in collection
+ee.List.sequence(0, ee.Number(collectionCount.subtract(1))).getInfo()
+    .map(function(image){
+        var scene = ee.Image(S1_set.get(image));
+        Map.addLayer(scene, VizParams);
+});
+
+// Add site point and buffer
+Map.addLayer(ptsBuff,
+             {'color': 'red'},
+             'Result [red]: ptsBuff');
+Map.addLayer(ptsCentre,
+          {'color': 'blue'},
+          'Geometry [blue]: ptsCentre');
